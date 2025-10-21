@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import json
 import os
+import google.generativeai as genai
 
 # Page configuration
 st.set_page_config(page_title="Personal Budget Tracker", page_icon="💰", layout="wide")
@@ -201,7 +202,7 @@ with st.sidebar:
         )
 
 # Main content tabs
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "💵 Add Income", "💸 Add Expense", "🏦 Savings Account", "📈 History"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Dashboard", "💵 Add Income", "💸 Add Expense", "🏦 Savings Account", "📈 History", "🤖 AI Assistant"])
 
 with tab1:
     st.header("Budget Dashboard")
@@ -469,3 +470,100 @@ with tab5:
         )
         
         st.plotly_chart(fig, use_container_width=True)
+
+with tab6:
+    st.header("🤖 AI Budget Assistant")
+    st.markdown("Ask me anything about your budget, spending habits, or get financial advice!")
+    
+    # Get API key from secrets
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+    except:
+        api_key = None
+        st.error("⚠️ API key not found in secrets. Please add GEMINI_API_KEY to your Streamlit secrets.")
+        st.markdown("""
+        ### How to add API key to secrets:
+        1. Go to your app settings on Streamlit Cloud
+        2. Click "Secrets"
+        3. Add: `GEMINI_API_KEY = "your_key_here"`
+        4. Save and rerun the app
+        """)
+    
+    if api_key:
+        # Initialize chat history
+        if 'chat_history' not in st.session_state:
+            st.session_state.chat_history = []
+        
+        # Configure Gemini
+        try:
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel('gemini-pro')
+            
+            # Prepare budget context for the AI
+            budget_status = calculate_budget_status()
+            
+            context = f"""
+You are a helpful personal finance assistant. Here's the user's current financial situation:
+
+ACCOUNTS:
+- Current Account Balance: €{budget_status['current_account_balance']:.2f}
+- Savings Account Balance: €{budget_status['savings_balance']:.2f}
+- Total Wealth: €{budget_status['current_account_balance'] + budget_status['savings_balance']:.2f}
+
+BUDGET:
+- Daily Budget Allowance: €{budget_status['daily_budget']:.2f}
+- Available Today: €{budget_status['available_today']:.2f}
+- This Week Expenses: €{budget_status['current_week_expenses']:.2f}
+- Expected Spending This Week: €{budget_status['expected_spending']:.2f}
+
+INCOME & EXPENSES:
+- Total Income: €{budget_status['total_income']:.2f}
+- Total Expenses: €{budget_status['total_expenses']:.2f}
+"""
+            
+            # Add expense breakdown if available
+            if st.session_state.data['expenses']:
+                expenses_df = pd.DataFrame(st.session_state.data['expenses'])
+                category_summary = expenses_df.groupby('category')['amount'].sum().sort_values(ascending=False)
+                context += "\nEXPENSES BY CATEGORY:\n"
+                for category, amount in category_summary.items():
+                    context += f"- {category}: €{amount:.2f}\n"
+            
+            # Display chat history
+            for message in st.session_state.chat_history:
+                with st.chat_message(message["role"]):
+                    st.markdown(message["content"])
+            
+            # Chat input
+            if prompt := st.chat_input("Ask me about your budget..."):
+                # Add user message to chat history
+                st.session_state.chat_history.append({"role": "user", "content": prompt})
+                
+                # Display user message
+                with st.chat_message("user"):
+                    st.markdown(prompt)
+                
+                # Generate AI response
+                with st.chat_message("assistant"):
+                    with st.spinner("Thinking..."):
+                        try:
+                            full_prompt = context + f"\n\nUser question: {prompt}\n\nProvide helpful, specific advice based on their financial data. Use euros (€) in your response."
+                            response = model.generate_content(full_prompt)
+                            ai_response = response.text
+                            
+                            st.markdown(ai_response)
+                            
+                            # Add assistant response to chat history
+                            st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
+                        
+                        except Exception as e:
+                            st.error(f"Error generating response: {str(e)}")
+            
+            # Clear chat button
+            if st.button("🗑️ Clear Chat History"):
+                st.session_state.chat_history = []
+                st.rerun()
+        
+        except Exception as e:
+            st.error(f"Error configuring AI: {str(e)}")
+            st.info("Please check your API key in secrets and try again.")
